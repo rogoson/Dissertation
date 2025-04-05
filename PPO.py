@@ -174,7 +174,6 @@ class PPOAgent:
             self.actions_n,
             modelName="actor",
         ).to(device)
-        # self.actor_optimiser = Adam(self.actor.parameters(), lr=self.alpha, eps=1e-8)
 
         self.critic = CriticNetwork(
             self.fc1_n,
@@ -184,24 +183,16 @@ class PPOAgent:
             self.actions_n,
             modelName="critic",
         ).to(device)
-        # self.critic_optimiser = Adam(self.critic.parameters(), lr=self.alpha, eps=1e-8)
 
     def select_action(self, observation=None, random=False):
         with torch.no_grad():
             state = torch.FloatTensor(observation).to(device)
             distribution = self.actor(state)
-            # if random:
-            #     # if at beginning or using random agent
-            #     action = distribution.sample()
-            # else:
-            #     action = distribution.mean
-            action = distribution.sample()  # proper ppo
+            action = distribution.sample()
             criticValuation = self.critic(state)
-            probabilities = (
-                distribution.log_prob(action)
-            )  # assumes independence
+            probabilities = distribution.log_prob(action)  # assumes independence
             action = torch.squeeze(action)
-        self.time_step += 1
+        # self.time_step += 1 # not actually necessary to care about luckily
         return (
             action,
             probabilities,
@@ -211,13 +202,13 @@ class PPOAgent:
     def store(self, state, action, probabilities, valuations, reward, done):
         self.memory.store(state, action, probabilities, valuations, reward, done)
 
-    def train(self, FE):
+    def train(self, FE):  # joint training
         joint_params = (
             list(self.actor.parameters())
             + list(self.critic.parameters())
             + list(FE.parameters())
         )
-        optimizer = torch.optim.Adam(joint_params, lr=3e-4)  # initialise earlier
+        optimizer = torch.optim.Adam(joint_params, lr=self.alpha)  # initialise earlier
         for _ in range(self.epochs):
             (
                 stateArr,
@@ -247,7 +238,9 @@ class PPOAgent:
 
             values = torch.tensor(values).to(device)
             for batch in batches:
-                states = FE.forward(torch.tensor(stateArr[batch], dtype=torch.float32)).to(device)
+                states = FE.forward(
+                    torch.tensor(stateArr[batch], dtype=torch.float32)
+                ).to(device)
                 oldProbs = torch.tensor(oldProbArr[batch]).to(device)
                 actions = torch.tensor(actionArr[batch]).to(device)
 
