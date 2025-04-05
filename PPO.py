@@ -56,16 +56,13 @@ class CriticNetwork(nn.Module):
             batch_first=True,
         )
         self.fc1 = layerInit(Linear(self.lstmHiddenSize, self.fc1_n))
-        self.fc2 = layerInit(Linear(self.fc1_n, 1), std=1.0)
-        self.fc3 = layerInit(Linear(self.actions_n, 1))
+        self.fc2 = layerInit(Linear(self.fc1_n, self.fc2_n))
+        self.fc3 = layerInit(Linear(self.fc2_n, 1))
         self.tanh = nn.Tanh()
 
     def forward(self, state: torch.Tensor):
         lstmOut, (hidden, _) = self.lstm(state.unsqueeze(1))
         valuation = self.tanh(self.fc1(hidden[-1]))
-        valuation = valuation.view(-1, self.fc1_n, self.actions_n)
-
-        valuation = valuation.transpose(1, 2)
         valuation = self.tanh(self.fc2(valuation))
         valuation = valuation.squeeze(-1)
         valuation = self.fc3(valuation)
@@ -112,7 +109,7 @@ class ActorNetwork(nn.Module):
 
         self.fc1 = layerInit(Linear(self.lstmHiddenSize, self.fc1_n))
         self.fc2 = layerInit(Linear(self.fc1_n, self.fc2_n))
-        self.mean_layer = layerInit(Linear(self.fc2_n, 1), std=0.05)
+        self.mean_layer = layerInit(Linear(self.fc2_n, actions_n), std=0.05)
         self.log_std_layer = Parameter(torch.zeros(1, actions_n))
         self.relu = nn.ReLU()
         self.tanh = nn.Tanh()
@@ -199,9 +196,9 @@ class PPOAgent:
             # else:
             #     action = distribution.mean
             action = distribution.sample()  # proper ppo
-            criticValuation = self.critic(state).sum(1).detach().numpy()
+            criticValuation = self.critic(state)
             probabilities = (
-                distribution.log_prob(action).sum(1).detach().numpy()
+                distribution.log_prob(action)
             )  # assumes independence
             action = torch.squeeze(action)
         self.time_step += 1
@@ -250,25 +247,18 @@ class PPOAgent:
 
             values = torch.tensor(values).to(device)
             for batch in batches:
-                states = []
-                for state in stateArr[batch]:  # sadly
-                    state_tensor = torch.tensor(state, dtype=torch.float32).to(device)
-                    feature = FE.forward(state_tensor)
-                    states.append(feature)
-                states = torch.cat(states, dim=0).to(device)
+                states = FE.forward(torch.tensor(stateArr[batch], dtype=torch.float32)).to(device)
                 oldProbs = torch.tensor(oldProbArr[batch]).to(device)
                 actions = torch.tensor(actionArr[batch]).to(device)
 
-                states = states.view(-1, states.shape[-1])
                 dist = self.actor(states)
                 criticValue = self.critic(states)
 
                 criticValue = torch.squeeze(criticValue)
 
                 newProbs = dist.log_prob(actions)
-                newProbs = newProbs.sum(1)
                 oldProbs = oldProbs.squeeze()
-                probRatio = newProbs.exp() / (oldProbs).exp()
+                probRatio = torch.exp(newProbs - oldProbs).sum(1)
                 weightedProbs = advantage[batch] * probRatio
                 weightedClippedProbs = (
                     torch.clamp(probRatio, 1 - self.policyClip, 1 + self.policyClip)
@@ -283,6 +273,7 @@ class PPOAgent:
                 totalLoss = actorLoss + 0.5 * criticLoss
                 optimizer.zero_grad()
                 totalLoss.backward()
+                torch.nn.utils.clip_grad_norm_(joint_params, max_norm=0.5)
                 optimizer.step()
         self.memory.clear()
 

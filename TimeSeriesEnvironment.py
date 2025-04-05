@@ -11,29 +11,20 @@ class TimeSeriesEnvironment(gym.Env):
         START_INDEX,
         TIME_WINDOW,
         TRAINING_EPS,
-        stateSize,
-        extractor,
         startCash,
         AGENT_RISK_AVERSION,  # i know, forgive me
         transactionCost=0.001,
     ):
-        super(TimeSeriesEnvironment, self).__init__()
-        self.action_space = spaces.Box(
-            low=0, high=1, shape=(len(marketData.keys()) + 1,), dtype=np.float32
-        )
-        self.observation_space = spaces.Box(
-            low=-1, high=1, shape=(stateSize,), dtype=np.float32
-        )
+        
         self.marketData = marketData
         self.START_INDEX = START_INDEX
         self.TIME_WINDOW = TIME_WINDOW
         self.timeStep = 0
         self.TRAINING_EPS = TRAINING_EPS
         self.transactionCost = transactionCost
-        self.lastAllocation = None  # For transaction Cost Calculation
+        self.allocations = []  # For transaction Cost Calculation
         self.startCash = startCash
         self.previousPortfolioValue = None
-        self.featureExtractor = extractor
         self.RETURNS = [0]
         self.PORTFOLIO_VALUES = [self.startCash]
         self.AGENT_RISK_AVERSION = AGENT_RISK_AVERSION
@@ -44,6 +35,7 @@ class TimeSeriesEnvironment(gym.Env):
         self.startHavingEffect = 0  # essentially a one-time switch
         self.countsIndex = 0
         self.turbulenceThreshold = self.getTurbulenceThreshold()
+        self.maxAllocationChange = 0.5
 
         # Required for Differential Sharpe Ratio
         self.meanReturn = 0.0
@@ -100,33 +92,40 @@ class TimeSeriesEnvironment(gym.Env):
         turbulence = deviation.T @ inverseCovariance @ deviation
         return turbulence
 
-    def getData(self, timeStep=None, useExtractor=False):
+    def getData(self, timeStep=None):
         if timeStep is None:
             timeStep = self.timeStep
-        data = self.getRelevantData(
-            self.marketData,  # the agent should see a normalised form of the data
+        data = self.getMarketData(
+            self.marketData,  
             self.START_INDEX,
             timeStep,
             self.TIME_WINDOW,
         )
-        data = np.array([(index).values[:-1] for index in data])
-        return (
-            self.featureExtractor.forward(torch.tensor(data, dtype=torch.float32))
-            if useExtractor
-            else data
-        )  # not including the (to be predicted) last timestep
+        return data  # not including the (to be predicted) last timestep
 
-    def getRelevantData(self, dataframes, START_INDEX, i, TIME_WINDOW):
+    def getMarketData(self, dataframes, START_INDEX, i, TIME_WINDOW):
+        relevantData = []
+        for p in range(0, TIME_WINDOW): 
+            rel = np.array(np.append(self.allocations[-p][1:], self.PORTFOLIO_VALUES[-p]))
+            for _, data in dataframes.items():
+                index = START_INDEX + i - p
+                toBeAppended = data.iloc[index, :]
+                rel = np.append(rel, toBeAppended.values[:-1])#no need for return 
+            relevantData.append(rel)
+        return np.array(relevantData)
+
+    def getChangeData(self, dataframes, START_INDEX, i):
         relevantData = []
         for _, data in dataframes.items():
+            firstIndex = START_INDEX + i
             relevantData.append(
-                data.iloc[START_INDEX + i : START_INDEX + TIME_WINDOW + 2 + i][1:]
+                data["close"].iloc[firstIndex: firstIndex + 2]
             )  # skip time column
         return relevantData
 
     def step(self, action, haveEffect, rewardMethod="CVaR"):
-        relevantData = self.getRelevantData(
-            self.marketData, self.START_INDEX, self.timeStep, self.TIME_WINDOW
+        relevantData = self.getChangeData(
+            self.marketData, self.START_INDEX, self.timeStep
         )
         reward = (
             self.returnNewPortfolioValue(
@@ -173,7 +172,7 @@ class TimeSeriesEnvironment(gym.Env):
         else:
             reward = self.calculateDifferentialSharpeRatio(reward)
         return (
-            self.getData(useExtractor=False),
+            None,
             reward,
             done,
             False,
@@ -256,7 +255,7 @@ class TimeSeriesEnvironment(gym.Env):
     ):
         super().reset(seed=seed)
         self.timeStep = 0
-        self.lastAllocation = None
+        self.allocations = []
         self.previousPortfolioValue = None
         self.PORTFOLIO_VALUES = [self.startCash]
         self.isReady = False
@@ -267,32 +266,38 @@ class TimeSeriesEnvironment(gym.Env):
         self.m2 = 0.0
         self.startHavingEffect = 0
         self.countsIndex = 0
-        # return self.getData(useExtractor=True), {}
 
-    def calculatePortfolioValue(self, currentAllocation, closingPriceChanges):
-        if self.previousPortfolioValue == None:
+    def calculatePortfolioValue(self, targetAllocation, closingPriceChanges):
+        targetAllocation = np.array(targetAllocation)
+        if self.previousPortfolioValue is None:
             self.previousPortfolioValue = self.startCash
+
+        if self.allocations:
+            prevAllocation = np.array(self.allocations[-1])
+            currentAllocation = (1 - self.maxAllocationChange) * prevAllocation + self.maxAllocationChange * targetAllocation
+            normalization = currentAllocation.sum()
+            if normalization != 0:
+                currentAllocation = currentAllocation / normalization
+        else:
+            currentAllocation = targetAllocation
         wealthDistribution = self.previousPortfolioValue * currentAllocation
-        # 1 for cash - presumed to not change
-        changeWealth = (
-            np.array([1] + list(closingPriceChanges.values())) * wealthDistribution
-        )
-        transactionCost = None
-        if self.lastAllocation is not None:
+        # 1 for cash - presumed not to change
+        changeWealth = np.array([1] + list(closingPriceChanges.values())) * wealthDistribution
+
+        transactionCost = 0
+        if self.allocations:
             transactionCost = self.transactionCost * np.sum(
-                self.previousPortfolioValue
-                * abs(currentAllocation - self.lastAllocation)
+                self.previousPortfolioValue * np.abs(currentAllocation - np.array(self.allocations[-1]))
             )
-        self.lastAllocation = currentAllocation
-        return np.sum(changeWealth) - (
-            transactionCost if transactionCost != None else 0
-        )
+        self.allocations.append(currentAllocation.tolist())
+        return np.sum(changeWealth) - transactionCost
+
 
     def returnNewPortfolioValue(self, dataKeys, relevantData, allocation):
         priceChanges = dict()
         for index, product in enumerate(dataKeys):
-            priceChanges[product] = relevantData[index]["close"].iloc[-1] / (
-                relevantData[index]["close"].iloc[-2]
+            priceChanges[product] = relevantData[index].iloc[-1] / (
+                relevantData[index].iloc[-2]
             )
         return self.calculatePortfolioValue(allocation, priceChanges)
 

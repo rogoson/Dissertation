@@ -4,7 +4,7 @@ import torch.nn as nn
 import torch.optim as optim
 import gymnasium as gym
 from utils import pathJoin
-from torch.nn import Linear, LSTM, ReLU
+from torch.nn import Linear, LSTM, Tanh
 from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
 
 _SAVE_SUFFIX = "_lstm"
@@ -14,23 +14,17 @@ _OPTIMISER_SAVE_SUFFIX = "_optimiser_lstm"
 class LstmFeatureExtractor(BaseFeaturesExtractor):
     def __init__(
         self,
-        observation_space: gym.spaces.Box,
-        numAssets,
         timeWindow,
         numFeatures,
-        memorySize,
         lstmHiddenSize=128,
         lstmOutputSize=50,
     ):
         super(LstmFeatureExtractor, self).__init__(
-            observation_space, features_dim=lstmOutputSize
+            observation_space=None, features_dim=lstmOutputSize
         )
         self.lstmHiddenSize = lstmHiddenSize
         self.lstmOutputSize = lstmOutputSize
-        self.numAssets = numAssets
         self.timeWindow = timeWindow
-        self.numFeatures = numFeatures
-        self.memorySize = memorySize
 
         self.lstm = LSTM(
             input_size=numFeatures,
@@ -38,13 +32,18 @@ class LstmFeatureExtractor(BaseFeaturesExtractor):
             num_layers=1,
             batch_first=True,
         )
-        self.fc = Linear(lstmHiddenSize, lstmOutputSize)
-        self.relu = ReLU()
+        self.fc1 = Linear(lstmHiddenSize, lstmHiddenSize)
+        self.fc2 = Linear(lstmHiddenSize, lstmHiddenSize)
+        self.fc3 = Linear(lstmHiddenSize, lstmOutputSize)
+        self.tanh = Tanh()
 
     def forward(self, x):
         lstm_out, _ = self.lstm(x)
         # Use the output from the last time step.
         last_out = lstm_out[:, -1, :]
-        features = self.fc(last_out)
-        features = self.relu(features)
+        features = self.tanh(self.fc1(last_out))
+        features = self.tanh(self.fc2(features))
+        features = self.tanh(self.fc3(features))
         return features
+
+
