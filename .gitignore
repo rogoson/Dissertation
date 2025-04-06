@@ -4,6 +4,8 @@ ActionsToTake.txt
 # Ignore folders
 __pycache__/
 venv/
+plots/
+portfolios
 
 # Ignore all files with .docx extension
 *.docx
