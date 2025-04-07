@@ -15,7 +15,7 @@ class TimeSeriesEnvironment(gym.Env):
         AGENT_RISK_AVERSION,  # i know, forgive me
         transactionCost=0.001,
     ):
-        
+
         self.marketData = marketData
         self.START_INDEX = START_INDEX
         self.TIME_WINDOW = TIME_WINDOW
@@ -96,7 +96,7 @@ class TimeSeriesEnvironment(gym.Env):
         if timeStep is None:
             timeStep = self.timeStep
         data = self.getMarketData(
-            self.marketData,  
+            self.marketData,
             self.START_INDEX,
             timeStep,
             self.TIME_WINDOW,
@@ -105,12 +105,14 @@ class TimeSeriesEnvironment(gym.Env):
 
     def getMarketData(self, dataframes, START_INDEX, i, TIME_WINDOW):
         relevantData = []
-        for p in range(0, TIME_WINDOW): 
-            rel = np.array(np.append(self.allocations[-p][1:], self.PORTFOLIO_VALUES[-p]))
+        for p in range(0, TIME_WINDOW):
+            rel = np.array(
+                np.append(self.allocations[-p][1:], self.PORTFOLIO_VALUES[-p])
+            )
             for _, data in dataframes.items():
                 index = START_INDEX + i - p
                 toBeAppended = data.iloc[index, :]
-                rel = np.append(rel, toBeAppended.values[:-1])#no need for return 
+                rel = np.append(rel, toBeAppended.values[:-1])  # no need for return
             relevantData.append(rel)
         return np.array(relevantData)
 
@@ -119,7 +121,7 @@ class TimeSeriesEnvironment(gym.Env):
         for _, data in dataframes.items():
             firstIndex = START_INDEX + i
             relevantData.append(
-                data["close"].iloc[firstIndex: firstIndex + 2]
+                data["close"].iloc[firstIndex : firstIndex + 2]
             )  # skip time column
         return relevantData
 
@@ -274,24 +276,25 @@ class TimeSeriesEnvironment(gym.Env):
 
         if self.allocations:
             prevAllocation = np.array(self.allocations[-1])
-            currentAllocation = (1 - self.maxAllocationChange) * prevAllocation + self.maxAllocationChange * targetAllocation
-            normalization = currentAllocation.sum()
-            if normalization != 0:
-                currentAllocation = currentAllocation / normalization
+            currentAllocation = (
+                1 - self.maxAllocationChange
+            ) * prevAllocation + self.maxAllocationChange * targetAllocation
         else:
             currentAllocation = targetAllocation
         wealthDistribution = self.previousPortfolioValue * currentAllocation
         # 1 for cash - presumed not to change
-        changeWealth = np.array([1] + list(closingPriceChanges.values())) * wealthDistribution
+        changeWealth = (
+            np.array([1] + list(closingPriceChanges.values())) * wealthDistribution
+        )
 
         transactionCost = 0
         if self.allocations:
             transactionCost = self.transactionCost * np.sum(
-                self.previousPortfolioValue * np.abs(currentAllocation - np.array(self.allocations[-1]))
+                self.previousPortfolioValue
+                * np.abs(currentAllocation - np.array(self.allocations[-1]))
             )
         self.allocations.append(currentAllocation.tolist())
         return np.sum(changeWealth) - transactionCost
-
 
     def returnNewPortfolioValue(self, dataKeys, relevantData, allocation):
         priceChanges = dict()
