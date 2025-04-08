@@ -5,6 +5,7 @@ ActionsToTake.txt
 __pycache__/
 venv/
 plots/
+plots_/
 portfolios
 
 # Ignore all files with .docx extension

@@ -38,8 +38,9 @@ class TimeSeriesEnvironment(gym.Env):
         self.maxAllocationChange = 0.5
 
         # Required for Differential Sharpe Ratio
-        self.meanReturn = 0.0
-        self.m2 = 0.0
+        self.decayRate = 0.05
+        self.meanReturn = None
+        self.meanSquaredReturn = None
 
     def getTurbulenceThreshold(self):
         """
@@ -51,7 +52,7 @@ class TimeSeriesEnvironment(gym.Env):
         for _, frame in self.marketData.items():
             returns.append(frame["Return"].values)
         returns = np.array(returns).T
-        for i in range(self.TIME_WINDOW, self.TRAINING_EPS):
+        for i in range(self.TIME_WINDOW, int(self.TRAINING_EPS * 2 / 3)):
             historicalReturns = returns[
                 self.START_INDEX + i - self.TIME_WINDOW : i + self.START_INDEX, :
             ]
@@ -64,7 +65,7 @@ class TimeSeriesEnvironment(gym.Env):
             deviation = returns[i] - mean
             turbulence = deviation.T @ inverseCovariance @ deviation
             turbList.append(turbulence)
-        threshold = np.percentile(turbList, 95)
+        threshold = np.percentile(turbList, 90)
         return threshold
 
     def getCurrentTurbulence(self):
@@ -164,7 +165,7 @@ class TimeSeriesEnvironment(gym.Env):
                 self.countsIndex = self.timeStep
                 self.previousPortfolioValue = self.startCash
                 self.traded = 0
-                self.meanReturn = 0.0
+                self.meanReturn = None
         self.updateReturns(reward)
 
         if rewardMethod == "CVaR":
@@ -212,27 +213,33 @@ class TimeSeriesEnvironment(gym.Env):
 
     def calculateDifferentialSharpeRatio(self, currentReturn):
         """
-        In line with Moody & Saffel's "Learning to Trade via Direct Reinforcement" 2001 Paper
+        In line with Moody & Saffel's "Reinforcement Learning for Trading" 1998 Paper
         """
-        if self.timeStep == 0:
+        if self.meanReturn is None:
             self.meanReturn = currentReturn
-            self.m2 = 0.0
+            self.meanSquaredReturn = currentReturn**2
             return 0.0
 
-        variance = self.m2 / (self.timeStep)
-        stdDev = np.sqrt(variance)
+        prevMeanReturn = self.meanReturn
+        prevMeanSquaredReturn = self.meanSquaredReturn
 
-        if stdDev == 0:
-            dSr = 0.0  # Avoid division by zero
-        else:
-            dSr = (currentReturn - self.meanReturn) / stdDev - 0.5 * (
-                self.meanReturn / (stdDev**3)
-            ) * ((currentReturn - self.meanReturn) ** 2 - stdDev**2)
+        deltaMean = currentReturn - prevMeanReturn
+        deltaSquared = currentReturn**2 - prevMeanSquaredReturn
 
-        delta = currentReturn - self.meanReturn
-        self.meanReturn += delta / self.timeStep
-        self.m2 += delta * (currentReturn - self.meanReturn)
-        return dSr
+        self.meanReturn += self.decayRate * deltaMean
+        self.meanSquaredReturn += self.decayRate * deltaSquared
+
+        denom = (prevMeanSquaredReturn - prevMeanReturn**2) ** 1.5
+        if denom == 0:
+            return 0.0
+
+        numerator = (
+            prevMeanSquaredReturn * deltaMean - 0.5 * prevMeanReturn * deltaSquared
+        )
+
+        differentialSharpeRatio = numerator / denom
+
+        return differentialSharpeRatio
 
     def normaliseValue(self, value):
         return np.sign(value) * (np.log1p(np.abs(value)))
@@ -264,8 +271,8 @@ class TimeSeriesEnvironment(gym.Env):
         self.CVaR = [0]
         self.RETURNS = [0]
         self.traded = 0
-        self.meanReturn = 0.0
-        self.m2 = 0.0
+        self.meanReturn = None
+        self.meanSquaredReturn = None
         self.startHavingEffect = 0
         self.countsIndex = 0
 
