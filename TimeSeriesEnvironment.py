@@ -38,21 +38,23 @@ class TimeSeriesEnvironment(gym.Env):
         self.maxAllocationChange = 0.5
 
         # Required for Differential Sharpe Ratio
-        self.decayRate = 0.05
+        self.decayRate = 0.01
         self.meanReturn = None
         self.meanSquaredReturn = None
 
-    def getTurbulenceThreshold(self):
+    def getTurbulenceThreshold(self, endWindow=None):
         """
         Based on formula found here:
         https://portfoliooptimizer.io/blog/the-turbulence-index-regime-based-partitioning-of-asset-returns/
         """
+        if endWindow == None:
+            endWindow = int(self.TRAINING_EPS * 2 / 3)
         returns = []
         turbList = []
         for _, frame in self.marketData.items():
             returns.append(frame["Return"].values)
         returns = np.array(returns).T
-        for i in range(self.TIME_WINDOW, int(self.TRAINING_EPS * 2 / 3)):
+        for i in range(self.TIME_WINDOW, endWindow):
             historicalReturns = returns[
                 self.START_INDEX + i - self.TIME_WINDOW : i + self.START_INDEX, :
             ]
@@ -161,6 +163,7 @@ class TimeSeriesEnvironment(gym.Env):
 
         if haveEffect:
             self.startHavingEffect += 1
+            self.turbulenceThreshold = self.getTurbulenceThreshold(self.timeStep)
             if self.startHavingEffect == 1:  # forgive me
                 self.countsIndex = self.timeStep
                 self.previousPortfolioValue = self.startCash
