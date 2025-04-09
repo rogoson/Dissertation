@@ -50,79 +50,66 @@ class ReplayBuffer:
         self.criticValues = []
 
 
-import torch
-import numpy as np
-
-
 class ReplayBufferTwo:
-    """
-    Creates a memory buffer for storing experiences
-
-    """
-
-    def __init__(self, max_size: int, state_n: int, actions_n: int):
-        self.max_size = max_size
-        self.state_memory = torch.zeros(
-            (self.max_size, actions_n, state_n), dtype=torch.float32
-        )
-        self.new_state_memory = torch.zeros(
-            (self.max_size, actions_n, state_n), dtype=torch.float32
-        )
-        self.action_memory = torch.zeros(
-            (self.max_size, actions_n), dtype=torch.float32
-        )
-        self.reward_memory = torch.zeros(self.max_size, dtype=torch.float32)
-        self.done_memory = torch.zeros(self.max_size, dtype=torch.bool)
-        self.memory_full = False
+    def __init__(self, maxSize):
+        self.maxSize = maxSize
+        self.stateMemory = []
+        self.newStateMemory = []
+        self.actionMemory = []
+        self.rewardMemory = []
+        self.doneMemory = []
+        self.memoryFull = False
         self.usePriority = True
         self.pointer = 0
 
     def genDist(self):
-        # A linear probability distribution. Sample selection is
-        # proportional to recency
-        if self.memory_full:
-            amount = np.arange(self.max_size)
-            pDist = (
-                np.concatenate(
-                    (amount[self.max_size - self.pointer :], amount[: self.pointer])
-                )
-                + 1
-            ) / (0.5 * self.max_size * (self.max_size + 1))
+        if self.memoryFull:
+            amount = np.arange(self.maxSize)
+            reordered = np.concatenate(
+                (amount[self.maxSize - self.pointer :], amount[: self.pointer])
+            )
+            pDist = (reordered + 1) / (0.5 * self.maxSize * (self.maxSize + 1))
         else:
             pDist = (np.arange(self.pointer) + 1) / (
                 0.5 * self.pointer * (self.pointer + 1)
             )
         return pDist
 
-    def store(
-        self,
-        state: torch.Tensor,
-        action: torch.Tensor,
-        reward: np.float32,
-        new_state: torch.Tensor,
-        done: torch.BoolType,
-    ):
-        self.state_memory[self.pointer] = state
-        self.new_state_memory[self.pointer] = new_state
-        self.action_memory[self.pointer] = action
-        self.reward_memory[self.pointer] = reward
-        self.done_memory[self.pointer] = done
+    def store(self, state, action, reward, newState, done):
+        if len(self.stateMemory) < self.maxSize:
+            self.stateMemory.append(state)
+            self.actionMemory.append(action)
+            self.rewardMemory.append(reward)
+            self.newStateMemory.append(newState)
+            self.doneMemory.append(done)
+        else:
+            self.stateMemory[self.pointer] = state
+            self.actionMemory[self.pointer] = action
+            self.rewardMemory[self.pointer] = reward
+            self.newStateMemory[self.pointer] = newState
+            self.doneMemory[self.pointer] = done
 
         self.pointer += 1
-        if self.pointer >= self.max_size:
+        if self.pointer >= self.maxSize:
             self.pointer = 0
-            self.memory_full = True
+            self.memoryFull = True
 
-    def sample(self, batch_size, use_pointer=False):
-        batch = np.random.choice(
-            self.max_size if not use_pointer else self.pointer,
-            batch_size,
-            p=self.genDist() if self.usePriority else None,
-        )
-        states = self.state_memory[batch]
-        new_states = self.new_state_memory[batch]
-        actions = self.action_memory[batch]
-        rewards = self.reward_memory[batch]
-        done_arr = self.done_memory[batch]
+    def sample(self, batchSize, usePointer=False):
+        size = self.maxSize if not usePointer else self.pointer
+        pDist = self.genDist() if self.usePriority else None
+        batch = np.random.choice(size, batchSize, p=pDist)
+        states = np.array(self.stateMemory)[batch]
+        actions = np.array(self.actionMemory)[batch]
+        rewards = np.array(self.rewardMemory)[batch]
+        newStates = np.array(self.newStateMemory)[batch]
+        doneArr = np.array(self.doneMemory)[batch]
+        return states, actions, rewards, newStates, doneArr
 
-        return states, actions, rewards, new_states, done_arr
+    def clear(self):
+        self.stateMemory = []
+        self.actionMemory = []
+        self.rewardMemory = []
+        self.newStateMemory = []
+        self.doneMemory = []
+        self.memoryFull = False
+        self.pointer = 0

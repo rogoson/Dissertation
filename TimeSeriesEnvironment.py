@@ -178,7 +178,9 @@ class TimeSeriesEnvironment(gym.Env):
         else:
             reward = self.calculateDifferentialSharpeRatio(reward)
         return (
-            None,
+            (
+                self.getData() if self.isReady else None
+            ),  # little weird but this now returns next timestep data
             reward,
             done,
             False,

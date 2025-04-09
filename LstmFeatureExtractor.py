@@ -38,12 +38,8 @@ class LstmFeatureExtractor(BaseFeaturesExtractor):
         self.tanh = Tanh()
 
     def forward(self, x):
-        lstm_out, _ = self.lstm(x)
-        # Use the output from the last time step.
-        last_out = lstm_out[:, -1, :]
-        features = self.tanh(self.fc1(last_out))
+        _, (hidden, _) = self.lstm(x)
+        features = self.tanh(self.fc1(hidden[-1]))
         features = self.tanh(self.fc2(features))
         features = self.tanh(self.fc3(features))
         return features
-
-
