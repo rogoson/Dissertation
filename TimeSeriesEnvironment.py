@@ -3,6 +3,8 @@ import gymnasium as gym
 import torch
 from gymnasium import spaces
 
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
 
 class TimeSeriesEnvironment(gym.Env):
     def __init__(
@@ -41,6 +43,7 @@ class TimeSeriesEnvironment(gym.Env):
         self.decayRate = 0.01
         self.meanReturn = None
         self.meanSquaredReturn = None
+        self.TD3 = False
 
     def getTurbulenceThreshold(self, endWindow=None):
         """
@@ -179,7 +182,7 @@ class TimeSeriesEnvironment(gym.Env):
             reward = self.calculateDifferentialSharpeRatio(reward)
         return (
             (
-                self.getData() if self.isReady else None
+                self.getData() if (self.isReady and self.TD3) else None
             ),  # little weird but this now returns next timestep data
             reward,
             done,
