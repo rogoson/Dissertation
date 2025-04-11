@@ -96,10 +96,6 @@ class ActorNetwork(nn.Module):
         self.optimiser_save_file_name = self.modelName + _OPTIMISER_SAVE_SUFFIX
 
         # Map state to action
-        """
-         Change these linear layers to something convolutional!!!
-         alongside sequential? he says performance changes 
-        """
         self.lstm = LSTM(
             input_size=self.state_n,
             hidden_size=self.lstmHiddenSize,

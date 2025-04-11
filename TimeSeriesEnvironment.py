@@ -37,7 +37,7 @@ class TimeSeriesEnvironment(gym.Env):
         self.startHavingEffect = 0  # essentially a one-time switch
         self.countsIndex = 0
         self.turbulenceThreshold = self.getTurbulenceThreshold()
-        self.maxAllocationChange = 0.5
+        self.maxAllocationChange = 1  # liquidigy parameter.
 
         # Required for Differential Sharpe Ratio
         self.decayRate = 0.01
