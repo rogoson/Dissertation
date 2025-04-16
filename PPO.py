@@ -8,9 +8,18 @@ import torch
 import torch.nn as nn
 
 from utils import pathJoin
-from Memory import ReplayBuffer
-from torch.nn import Linear, Softmax, LSTM, Sequential, init, Tanh, Parameter
-from torch.distributions import Normal
+from Memory import Memory
+from torch.nn import (
+    Linear,
+    Softmax,
+    LSTM,
+    Sequential,
+    init,
+    Tanh,
+    Parameter,
+    functional as F,
+)
+from torch.distributions import Dirichlet
 from torch.optim import Adam
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -105,8 +114,7 @@ class ActorNetwork(nn.Module):
 
         self.fc1 = layerInit(Linear(self.lstmHiddenSize, self.fc1_n))
         self.fc2 = layerInit(Linear(self.fc1_n, self.fc2_n))
-        self.mean_layer = layerInit(Linear(self.fc2_n, actions_n), std=0.05)
-        self.log_std_layer = Parameter(torch.zeros(1, actions_n))
+        self.alphaLayer = layerInit(Linear(self.fc2_n, actions_n), std=0.05)
         self.relu = nn.ReLU()
         self.tanh = nn.Tanh()
 
@@ -115,12 +123,9 @@ class ActorNetwork(nn.Module):
         lstmOut, (hidden, _) = self.lstm(state)
         x = self.relu(self.fc1(hidden[-1]))
         x = self.relu(self.fc2(x))
-        mean = self.tanh(self.mean_layer(x))
-        mean = mean.reshape(-1, self.actions_n)
-        log_std = self.log_std_layer.expand_as(mean)
-        std = torch.exp(log_std)
-        distribution = Normal(mean, std)
-        return distribution
+        alpha = F.softplus(self.alphaLayer(x)) + 1e-3  # gotta be positive
+        dist = torch.distributions.Dirichlet(alpha)
+        return dist
 
 
 class PPOAgent:
@@ -158,7 +163,7 @@ class PPOAgent:
         self.fc2_n = fc2_n
         self.gaeLambda = gaeLambda
         self.epochs = epochs
-        self.memory = ReplayBuffer(batchSize=batch_size)
+        self.memory = Memory(batchSize=batch_size)
         self.learn_step_count = 0
         self.time_step = 0
         self.riskAversion = riskAversion
@@ -182,20 +187,23 @@ class PPOAgent:
             modelName="critic",
         ).to(device)
 
-        self.featureExtractor = featureExtractor
-
-        self.joint_params = (
-            list(self.actor.parameters())
-            + list(self.critic.parameters())
-            + list(self.featureExtractor.parameters())
+        self.optimizer = torch.optim.Adam(
+            (
+                list(self.actor.parameters())
+                + list(self.critic.parameters())
+                + list(featureExtractor.parameters())
+            ),
+            lr=self.alpha,
         )
-        self.optimizer = torch.optim.Adam(self.joint_params, lr=self.alpha)
 
-    def select_action(self, observation=None, random=False):
+    def select_action(self, observation=None, sampling=False):
         with torch.no_grad():
             state = torch.FloatTensor(observation).to(device)
             distribution = self.actor(state)
-            action = distribution.sample()
+            if sampling:
+                action = distribution.sample()
+            else:
+                action = distribution.mean
             criticValuation = self.critic(state)
             probabilities = distribution.log_prob(action)  # assumes independence
             action = torch.squeeze(action)
@@ -209,8 +217,7 @@ class PPOAgent:
     def store(self, state, action, probabilities, valuations, reward, done):
         self.memory.store(state, action, probabilities, valuations, reward, done)
 
-    def train(self, FE):  # joint training
-
+    def train(self):  # joint training
         for _ in range(self.epochs):
             (
                 stateArr,
@@ -240,7 +247,7 @@ class PPOAgent:
 
             values = torch.tensor(values).to(device)
             for batch in batches:
-                states = FE.forward(
+                states = self.featureExtractor.forward(
                     torch.tensor(stateArr[batch], dtype=torch.float32)
                 ).to(device)
                 oldProbs = torch.tensor(oldProbArr[batch]).to(device)
@@ -253,7 +260,7 @@ class PPOAgent:
 
                 newProbs = dist.log_prob(actions)
                 oldProbs = oldProbs.squeeze()
-                probRatio = torch.exp(newProbs - oldProbs).sum(1)
+                probRatio = torch.exp(newProbs - oldProbs)
                 weightedProbs = advantage[batch] * probRatio
                 weightedClippedProbs = (
                     torch.clamp(probRatio, 1 - self.policyClip, 1 + self.policyClip)
@@ -266,10 +273,12 @@ class PPOAgent:
                 criticLoss = criticLoss.mean()
 
                 totalLoss = actorLoss + 0.5 * criticLoss
-                optimizer.zero_grad()
+                self.optimizer.zero_grad()
                 totalLoss.backward()
-                torch.nn.utils.clip_grad_norm_(joint_params, max_norm=0.5)
-                optimizer.step()
+                torch.nn.utils.clip_grad_norm_(
+                    self.optimizer.param_groups[0]["params"], max_norm=0.5
+                )
+                self.optimizer.step()
         self.memory.clear()
 
     def save(self, save_dir: str):
@@ -279,16 +288,12 @@ class PPOAgent:
             self.critic.state_dict(), pathJoin(save_dir, self.critic.save_file_name)
         )
         torch.save(
-            self.critic_optimiser.state_dict(),
+            self.optimizer.state_dict(),
             pathJoin(save_dir, self.critic.optimiser_save_file_name),
         )
 
         torch.save(
             self.actor.state_dict(), pathJoin(save_dir, self.actor.save_file_name)
-        )
-        torch.save(
-            self.actor_optimiser.state_dict(),
-            pathJoin(save_dir, self.actor.optimiser_save_file_name),
         )
 
     def load(self, save_dir: str):
@@ -298,7 +303,7 @@ class PPOAgent:
                 weights_only=True,
             )
         )
-        self.critic_optimiser.load_state_dict(
+        self.optimizer.load_state_dict(
             torch.load(
                 pathJoin(save_dir, self.critic.optimiser_save_file_name),
                 weights_only=True,
@@ -308,12 +313,6 @@ class PPOAgent:
         self.actor.load_state_dict(
             torch.load(
                 pathJoin(save_dir, self.actor.save_file_name),
-                weights_only=True,
-            )
-        )
-        self.actor_optimiser.load_state_dict(
-            torch.load(
-                pathJoin(save_dir, self.actor.optimiser_save_file_name),
                 weights_only=True,
             )
         )

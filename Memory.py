@@ -2,7 +2,7 @@ import torch
 import numpy as np
 
 
-class ReplayBuffer:
+class Memory:
     """
     Creates a memory buffer for storing experiences
 

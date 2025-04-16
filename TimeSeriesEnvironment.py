@@ -10,19 +10,15 @@ class TimeSeriesEnvironment(gym.Env):
     def __init__(
         self,
         marketData,
-        START_INDEX,
         TIME_WINDOW,
-        TRAINING_EPS,
         startCash,
         AGENT_RISK_AVERSION,  # i know, forgive me
         transactionCost=0.001,
     ):
 
         self.marketData = marketData
-        self.START_INDEX = START_INDEX
         self.TIME_WINDOW = TIME_WINDOW
         self.timeStep = 0
-        self.TRAINING_EPS = TRAINING_EPS
         self.transactionCost = transactionCost
         self.allocations = []  # For transaction Cost Calculation
         self.startCash = startCash
@@ -33,10 +29,6 @@ class TimeSeriesEnvironment(gym.Env):
         self.isReady = False
 
         self.CVaR = [0]
-        self.traded = 0  # counts number of trades, for APPT
-        self.startHavingEffect = 0  # essentially a one-time switch
-        self.countsIndex = 0
-
         self.maxAllocationChange = 1  # liquidigy parameter.
 
         # Required for Differential Sharpe Ratio
@@ -49,38 +41,35 @@ class TimeSeriesEnvironment(gym.Env):
             timeStep = self.timeStep
         data = self.getMarketData(
             self.marketData,
-            self.START_INDEX,
             timeStep,
             self.TIME_WINDOW,
         )
-        return data  # not including the (to be predicted) last timestep
+        return data
 
-    def getMarketData(self, dataframes, START_INDEX, i, TIME_WINDOW):
+    def getMarketData(self, dataframes, i, TIME_WINDOW):
         relevantData = []
         for p in range(0, TIME_WINDOW):
             rel = np.array(
                 np.append(self.allocations[-p][1:], self.PORTFOLIO_VALUES[-p])
             )
             for _, data in dataframes.items():
-                index = START_INDEX + i - p
+                index = i - p
                 toBeAppended = data.iloc[index, :]
                 rel = np.append(rel, toBeAppended.values[:-1])  # no need for return
             relevantData.append(rel)
         return np.array(relevantData)
 
-    def getChangeData(self, dataframes, START_INDEX, i):
+    def getChangeData(self, dataframes, i):
         relevantData = []
         for _, data in dataframes.items():
-            firstIndex = START_INDEX + i
+            firstIndex = i
             relevantData.append(
                 data["close"].iloc[firstIndex : firstIndex + 2]
             )  # skip time column
         return relevantData
 
-    def step(self, action, haveEffect, rewardMethod="CVaR"):
-        relevantData = self.getChangeData(
-            self.marketData, self.START_INDEX, self.timeStep
-        )
+    def step(self, action, rewardMethod="CVaR"):
+        relevantData = self.getChangeData(self.marketData, self.timeStep)
         reward = (
             self.returnNewPortfolioValue(
                 self.marketData.keys(),
@@ -93,7 +82,6 @@ class TimeSeriesEnvironment(gym.Env):
         self.timeStep += 1
         info = dict()
 
-        terminated = False
         done = False
 
         # below not really needed if using indexes [virtually impossible to lose all your money]
@@ -104,25 +92,19 @@ class TimeSeriesEnvironment(gym.Env):
             done = True
             info["reason"] = "max_steps_reached"
 
-        if haveEffect:
-            self.startHavingEffect += 1
-            if self.startHavingEffect == 1:  # forgive me
-                self.countsIndex = self.timeStep
-                self.previousPortfolioValue = self.startCash
-                self.traded = 0
-                self.meanReturn = None
         self.updateReturns(reward)
-
         if rewardMethod == "CVaR":
             reward = self.getCVaRReward(reward)
         elif rewardMethod == "Standard Logarithmic Returns":
             reward = self.getCVaRReward(reward, False)
         else:
             reward = self.calculateDifferentialSharpeRatio(reward)
+
+        if info.get("reason") == "portfolio_below_70%":
+            reward -= 100 * (reward)  # big penalty for loss of 30%
+
         return (
-            (
-                self.getData() if (self.isReady and self.TD3) else None
-            ),  # little weird but this now returns next timestep data
+            None,
             reward,
             done,
             False,
@@ -138,13 +120,7 @@ class TimeSeriesEnvironment(gym.Env):
         info["Cumulative \nReturn (%)"] = round(
             100 * (portfolioValues[-1] / self.startCash) - 100, 2
         )
-        info["Maximum Earning \nRate (%)"] = round(
-            100 * (np.max(portfolioValues) / self.startCash) - 100, 2
-        )  # realised i coded this wrong when writing conclusion ...
         info["Maximum \nPullback (%)"] = self.maxPullback(portfolioValues)
-        info["Average Profitability \nper Trade"] = (
-            portfolioValues[-1] - self.startCash
-        ) / self.traded
         info["Sharpe Ratio"] = round(np.mean(returns) / np.std(returns), 4)
         info["Total Timesteps"] = self.timeStep
         return info
@@ -172,20 +148,16 @@ class TimeSeriesEnvironment(gym.Env):
 
         deltaMean = currentReturn - prevMeanReturn
         deltaSquared = currentReturn**2 - prevMeanSquaredReturn
-
         self.meanReturn += self.decayRate * deltaMean
         self.meanSquaredReturn += self.decayRate * deltaSquared
 
         denom = (prevMeanSquaredReturn - prevMeanReturn**2) ** 1.5
         if denom == 0:
             return 0.0
-
         numerator = (
             prevMeanSquaredReturn * deltaMean - 0.5 * prevMeanReturn * deltaSquared
         )
-
         differentialSharpeRatio = numerator / denom
-
         return differentialSharpeRatio
 
     def normaliseValue(self, value):
@@ -217,11 +189,9 @@ class TimeSeriesEnvironment(gym.Env):
         self.isReady = False
         self.CVaR = [0]
         self.RETURNS = [0]
-        self.traded = 0
         self.meanReturn = None
         self.meanSquaredReturn = None
         self.startHavingEffect = 0
-        self.countsIndex = 0
 
     def calculatePortfolioValue(self, targetAllocation, closingPriceChanges):
         targetAllocation = np.array(targetAllocation)
@@ -264,7 +234,7 @@ class TimeSeriesEnvironment(gym.Env):
         prices = []
         for product in self.marketData.values():
             prices.append(
-                [product["close"].iloc[: self.TRAINING_EPS]],
+                product["close"],
             )
         return prices
 
