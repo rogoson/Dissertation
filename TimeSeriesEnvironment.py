@@ -36,67 +36,13 @@ class TimeSeriesEnvironment(gym.Env):
         self.traded = 0  # counts number of trades, for APPT
         self.startHavingEffect = 0  # essentially a one-time switch
         self.countsIndex = 0
-        self.turbulenceThreshold = self.getTurbulenceThreshold()
+
         self.maxAllocationChange = 1  # liquidigy parameter.
 
         # Required for Differential Sharpe Ratio
         self.decayRate = 0.01
         self.meanReturn = None
         self.meanSquaredReturn = None
-        self.TD3 = False
-
-    def getTurbulenceThreshold(self, endWindow=None):
-        """
-        Based on formula found here:
-        https://portfoliooptimizer.io/blog/the-turbulence-index-regime-based-partitioning-of-asset-returns/
-        """
-        if endWindow == None:
-            endWindow = int(self.TRAINING_EPS * 2 / 3)
-        returns = []
-        turbList = []
-        for _, frame in self.marketData.items():
-            returns.append(frame["Return"].values)
-        returns = np.array(returns).T
-        for i in range(self.TIME_WINDOW, endWindow):
-            historicalReturns = returns[
-                self.START_INDEX + i - self.TIME_WINDOW : i + self.START_INDEX, :
-            ]
-            mean = np.mean(historicalReturns, axis=0)
-            covariance = np.cov(historicalReturns, rowvar=False)
-            try:
-                inverseCovariance = np.linalg.inv(covariance)
-            except np.linalg.LinAlgError:
-                inverseCovariance = np.linalg.pinv(covariance)
-            deviation = returns[i] - mean
-            turbulence = deviation.T @ inverseCovariance @ deviation
-            turbList.append(turbulence)
-        threshold = np.percentile(turbList, 90)
-        return threshold
-
-    def getCurrentTurbulence(self):
-        if self.timeStep < self.TIME_WINDOW:
-            return 0
-        historicalReturns = []
-        for _, frame in self.marketData.items():
-            historicalReturns.append(
-                frame["Return"].values[
-                    self.START_INDEX
-                    + self.timeStep
-                    - self.TIME_WINDOW : self.START_INDEX
-                    + self.timeStep
-                ]
-            )
-        historicalReturns = np.array(historicalReturns).T
-        mean = np.mean(historicalReturns, axis=0)
-        covariance = np.cov(historicalReturns, rowvar=False)
-        currentReturn = historicalReturns[-1, :]
-        try:
-            inverseCovariance = np.linalg.inv(covariance)
-        except np.linalg.LinAlgError:
-            inverseCovariance = np.linalg.pinv(covariance)
-        deviation = currentReturn - mean
-        turbulence = deviation.T @ inverseCovariance @ deviation
-        return turbulence
 
     def getData(self, timeStep=None):
         if timeStep is None:
@@ -147,12 +93,6 @@ class TimeSeriesEnvironment(gym.Env):
         self.timeStep += 1
         info = dict()
 
-        # turbulence: if above threshold, alert agent
-        turbulence = self.getCurrentTurbulence()
-        if turbulence > self.turbulenceThreshold:
-            info["turbulence_breached"] = True
-        else:
-            info["turbulence_breached"] = False
         terminated = False
         done = False
 
@@ -166,7 +106,6 @@ class TimeSeriesEnvironment(gym.Env):
 
         if haveEffect:
             self.startHavingEffect += 1
-            self.turbulenceThreshold = self.getTurbulenceThreshold(self.timeStep)
             if self.startHavingEffect == 1:  # forgive me
                 self.countsIndex = self.timeStep
                 self.previousPortfolioValue = self.startCash
@@ -176,7 +115,7 @@ class TimeSeriesEnvironment(gym.Env):
 
         if rewardMethod == "CVaR":
             reward = self.getCVaRReward(reward)
-        elif rewardMethod == "Standard Log":
+        elif rewardMethod == "Standard Logarithmic Returns":
             reward = self.getCVaRReward(reward, False)
         else:
             reward = self.calculateDifferentialSharpeRatio(reward)
@@ -201,7 +140,7 @@ class TimeSeriesEnvironment(gym.Env):
         )
         info["Maximum Earning \nRate (%)"] = round(
             100 * (np.max(portfolioValues) / self.startCash) - 100, 2
-        )
+        )  # realised i coded this wrong when writing conclusion ...
         info["Maximum \nPullback (%)"] = self.maxPullback(portfolioValues)
         info["Average Profitability \nper Trade"] = (
             portfolioValues[-1] - self.startCash

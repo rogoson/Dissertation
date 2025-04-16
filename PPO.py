@@ -144,6 +144,7 @@ class PPOAgent:
         gaeLambda: int = 0.95,
         epochs=10,
         riskAversion=0,
+        featureExtractor=None,
     ):
         self.alpha = alpha
         self.policyClip = policyClip
@@ -161,6 +162,7 @@ class PPOAgent:
         self.learn_step_count = 0
         self.time_step = 0
         self.riskAversion = riskAversion
+        self.featureExtractor = featureExtractor
 
         self.actor = ActorNetwork(
             self.fc1_n,
@@ -179,6 +181,15 @@ class PPOAgent:
             self.actions_n,
             modelName="critic",
         ).to(device)
+
+        self.featureExtractor = featureExtractor
+
+        self.joint_params = (
+            list(self.actor.parameters())
+            + list(self.critic.parameters())
+            + list(self.featureExtractor.parameters())
+        )
+        self.optimizer = torch.optim.Adam(self.joint_params, lr=self.alpha)
 
     def select_action(self, observation=None, random=False):
         with torch.no_grad():
@@ -199,12 +210,7 @@ class PPOAgent:
         self.memory.store(state, action, probabilities, valuations, reward, done)
 
     def train(self, FE):  # joint training
-        joint_params = (
-            list(self.actor.parameters())
-            + list(self.critic.parameters())
-            + list(FE.parameters())
-        )
-        optimizer = torch.optim.Adam(joint_params, lr=self.alpha)  # initialise earlier
+
         for _ in range(self.epochs):
             (
                 stateArr,
