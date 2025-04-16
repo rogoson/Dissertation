@@ -296,6 +296,11 @@ class PPOAgent:
             self.actor.state_dict(), pathJoin(save_dir, self.actor.save_file_name)
         )
 
+        torch.save(
+            self.featureExtractor.state_dict(),
+            pathJoin(save_dir, self.featureExtractor.save_file_name),
+        )
+
     def load(self, save_dir: str):
         self.critic.load_state_dict(
             torch.load(
@@ -313,6 +318,12 @@ class PPOAgent:
         self.actor.load_state_dict(
             torch.load(
                 pathJoin(save_dir, self.actor.save_file_name),
+                weights_only=True,
+            )
+        )
+        self.featureExtractor.load_state_dict(
+            torch.load(
+                pathJoin(save_dir, self.featureExtractor.save_file_name),
                 weights_only=True,
             )
         )
