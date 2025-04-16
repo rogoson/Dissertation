@@ -10,15 +10,19 @@ class TimeSeriesEnvironment(gym.Env):
     def __init__(
         self,
         marketData,
+        normData,
         TIME_WINDOW,
+        EPISODE_LENGTH,
         startCash,
         AGENT_RISK_AVERSION,  # i know, forgive me
         transactionCost=0.001,
     ):
 
         self.marketData = marketData
+        self.normData = normData
         self.TIME_WINDOW = TIME_WINDOW
         self.timeStep = 0
+        self.episodeLength = EPISODE_LENGTH
         self.transactionCost = transactionCost
         self.allocations = []  # For transaction Cost Calculation
         self.startCash = startCash
@@ -40,7 +44,7 @@ class TimeSeriesEnvironment(gym.Env):
         if timeStep is None:
             timeStep = self.timeStep
         data = self.getMarketData(
-            self.marketData,
+            self.normData,
             timeStep,
             self.TIME_WINDOW,
         )
@@ -49,9 +53,7 @@ class TimeSeriesEnvironment(gym.Env):
     def getMarketData(self, dataframes, i, TIME_WINDOW):
         relevantData = []
         for p in range(0, TIME_WINDOW):
-            rel = np.array(
-                np.append(self.allocations[-p][1:], self.PORTFOLIO_VALUES[-p])
-            )
+            rel = np.array(np.append(self.allocations[-p], self.PORTFOLIO_VALUES[-p]))
             for _, data in dataframes.items():
                 index = i - p
                 toBeAppended = data.iloc[index, :]
@@ -59,22 +61,11 @@ class TimeSeriesEnvironment(gym.Env):
             relevantData.append(rel)
         return np.array(relevantData)
 
-    def getChangeData(self, dataframes, i):
-        relevantData = []
-        for _, data in dataframes.items():
-            firstIndex = i
-            relevantData.append(
-                data["close"].iloc[firstIndex : firstIndex + 2]
-            )  # skip time column
-        return relevantData
-
     def step(self, action, rewardMethod="CVaR"):
-        relevantData = self.getChangeData(self.marketData, self.timeStep)
         reward = (
-            self.returnNewPortfolioValue(
-                self.marketData.keys(),
-                relevantData,
+            self.calculatePortfolioValue(
                 action,
+                self.marketData.iloc[self.timeStep + 1],
             )
             - self.previousPortfolioValue
         )
@@ -88,7 +79,7 @@ class TimeSeriesEnvironment(gym.Env):
         if (self.previousPortfolioValue + reward) / self.startCash < 0.7:
             done = True
             info["reason"] = "portfolio_below_70%"
-        elif self.timeStep == self.TRAINING_EPS:
+        elif self.timeStep + 1 == self.episodeLength:
             done = True
             info["reason"] = "max_steps_reached"
 
@@ -113,19 +104,19 @@ class TimeSeriesEnvironment(gym.Env):
 
     def getMetrics(self, portfolioValues=None, returns=None):
         if portfolioValues == None:
-            portfolioValues = self.PORTFOLIO_VALUES[self.countsIndex :]
+            portfolioValues = self.PORTFOLIO_VALUES
         if returns == None:
-            returns = self.RETURNS[self.countsIndex :]
+            returns = self.RETURNS
         info = dict()
         info["Cumulative \nReturn (%)"] = round(
             100 * (portfolioValues[-1] / self.startCash) - 100, 2
         )
-        info["Maximum \nPullback (%)"] = self.maxPullback(portfolioValues)
+        info["Maximum \nPullback (%)"] = self.maxPullback()
         info["Sharpe Ratio"] = round(np.mean(returns) / np.std(returns), 4)
         info["Total Timesteps"] = self.timeStep
         return info
 
-    def maxPullback(self, portfolioValues):
+    def maxPullback(self):
         maxValue = float("-inf")
         maxDrawdown = 0.0
         for value in self.PORTFOLIO_VALUES:
@@ -204,29 +195,23 @@ class TimeSeriesEnvironment(gym.Env):
                 1 - self.maxAllocationChange
             ) * prevAllocation + self.maxAllocationChange * targetAllocation
         else:
+            prevAllocation = np.zeros(len(closingPriceChanges) + 1)
+            prevAllocation[0] = 1
+            self.allocations.append(prevAllocation)
             currentAllocation = targetAllocation
         wealthDistribution = self.previousPortfolioValue * currentAllocation
         # 1 for cash - presumed not to change
-        changeWealth = (
-            np.array([1] + list(closingPriceChanges.values())) * wealthDistribution
-        )
+        closingPriceChanges = np.insert(closingPriceChanges, 0, 0)
+        changeWealth = (1 + closingPriceChanges) * wealthDistribution
 
         transactionCost = 0
-        if self.allocations:
+        if self.transactionCost > 0:
             transactionCost = self.transactionCost * np.sum(
                 self.previousPortfolioValue
                 * np.abs(currentAllocation - np.array(self.allocations[-1]))
             )
-        self.allocations.append(currentAllocation.tolist())
+        self.allocations.append(currentAllocation)
         return np.sum(changeWealth) - transactionCost
-
-    def returnNewPortfolioValue(self, dataKeys, relevantData, allocation):
-        priceChanges = dict()
-        for index, product in enumerate(dataKeys):
-            priceChanges[product] = relevantData[index].iloc[-1] / (
-                relevantData[index].iloc[-2]
-            )
-        return self.calculatePortfolioValue(allocation, priceChanges)
 
     def getPrices(
         self,

@@ -196,7 +196,7 @@ class PPOAgent:
             lr=self.alpha,
         )
 
-    def select_action(self, observation=None, sampling=False):
+    def select_action(self, observation=None, sampling=True):
         with torch.no_grad():
             state = torch.FloatTensor(observation).to(device)
             distribution = self.actor(state)
