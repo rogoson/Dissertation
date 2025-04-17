@@ -112,14 +112,17 @@ class TimeSeriesEnvironment(gym.Env):
             100 * (portfolioValues[-1] / self.startCash) - 100, 2
         )
         info["Maximum \nPullback (%)"] = self.maxPullback()
+        returns = [(returns[i] / returns[i - 1]) - 1 for i in range(1, len(returns))]
         info["Sharpe Ratio"] = round(np.mean(returns) / np.std(returns), 4)
         info["Total Timesteps"] = self.timeStep
         return info
 
-    def maxPullback(self):
+    def maxPullback(self, portfolioValues=None):
+        if portfolioValues == None:
+            portfolioValues = self.PORTFOLIO_VALUES
         maxValue = float("-inf")
         maxDrawdown = 0.0
-        for value in self.PORTFOLIO_VALUES:
+        for value in portfolioValues:
             maxValue = max(maxValue, value)
             drawdown = (maxValue - value) / maxValue * 100
             maxDrawdown = max(maxDrawdown, drawdown)
