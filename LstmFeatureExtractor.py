@@ -8,7 +8,6 @@ from torch.nn import Linear, LSTM, Tanh
 from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
 
 _SAVE_SUFFIX = "_lstm"
-_OPTIMISER_SAVE_SUFFIX = "_optimiser_lstm"
 
 
 class LstmFeatureExtractor(BaseFeaturesExtractor):
@@ -18,6 +17,7 @@ class LstmFeatureExtractor(BaseFeaturesExtractor):
         numFeatures,
         lstmHiddenSize=128,
         lstmOutputSize=50,
+        modelName="featureExtractor",
     ):
         super(LstmFeatureExtractor, self).__init__(
             observation_space=None, features_dim=lstmOutputSize
@@ -25,6 +25,8 @@ class LstmFeatureExtractor(BaseFeaturesExtractor):
         self.lstmHiddenSize = lstmHiddenSize
         self.lstmOutputSize = lstmOutputSize
         self.timeWindow = timeWindow
+        self.modelName = modelName
+        self.save_file_name = self.modelName + _SAVE_SUFFIX
 
         self.lstm = LSTM(
             input_size=numFeatures,
