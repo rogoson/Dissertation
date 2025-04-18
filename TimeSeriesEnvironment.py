@@ -104,15 +104,17 @@ class TimeSeriesEnvironment(gym.Env):
     def getMetrics(self, portfolioValues=None, returns=None):
         if portfolioValues == None:
             portfolioValues = self.PORTFOLIO_VALUES
-        if returns == None:
-            returns = self.RETURNS
         info = dict()
         info["Cumulative \nReturn (%)"] = round(
             100 * (portfolioValues[-1] / self.startCash) - 100, 2
         )
         info["Maximum \nDrawdown (%)"] = self.maxDrawdown()
-        returns = [(returns[i] / returns[i - 1]) - 1 for i in range(1, len(returns))]
-        info["Sharpe Ratio"] = round(np.mean(returns) / np.std(returns), 4)
+        percChange = np.diff(portfolioValues) / portfolioValues[:-1]
+        info["Sharpe Ratio"] = (
+            round(np.mean(percChange) / np.std(percChange), 4)
+            if np.std(percChange) != 0
+            else 0.0
+        )
         info["Total Timesteps"] = self.timeStep
         return info
 
