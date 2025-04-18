@@ -26,7 +26,7 @@ class TimeSeriesEnvironment(gym.Env):
         self.transactionCost = transactionCost
         self.allocations = []  # For transaction Cost Calculation
         self.startCash = startCash
-        self.previousPortfolioValue = None
+        self.previousPortfolioValue = startCash
         self.RETURNS = [0]
         self.PORTFOLIO_VALUES = [self.startCash]
         self.AGENT_RISK_AVERSION = AGENT_RISK_AVERSION
@@ -62,28 +62,27 @@ class TimeSeriesEnvironment(gym.Env):
         return np.array(relevantData)
 
     def step(self, action, rewardMethod="CVaR"):
-        reward = (
-            self.calculatePortfolioValue(
-                action,
-                self.marketData.iloc[self.timeStep + 1],
-            )
-            - self.previousPortfolioValue
+        newPortfolioValue = self.calculatePortfolioValue(
+            action,
+            self.marketData.iloc[self.timeStep + 1],
         )
 
+        reward = newPortfolioValue - self.PORTFOLIO_VALUES[-1]
         self.timeStep += 1
         info = dict()
 
         done = False
 
         # below not really needed if using indexes [virtually impossible to lose all your money]
-        if (self.previousPortfolioValue + reward) / self.startCash < 0.7:
+        if newPortfolioValue / self.startCash < 0.7:
             done = True
             info["reason"] = "portfolio_below_70%"
         elif self.timeStep + 1 == self.episodeLength:
             done = True
             info["reason"] = "max_steps_reached"
 
-        self.updateReturns(reward)
+        self.RETURNS.append(reward)
+        self.PORTFOLIO_VALUES.append(newPortfolioValue)
         if rewardMethod == "CVaR":
             reward = self.getCVaRReward(reward)
         elif rewardMethod == "Standard Logarithmic Returns":
@@ -92,7 +91,7 @@ class TimeSeriesEnvironment(gym.Env):
             reward = self.calculateDifferentialSharpeRatio(reward)
 
         if info.get("reason") == "portfolio_below_70%":
-            reward -= 100 * (reward)  # big penalty for loss of 30%
+            reward -= 100 * reward  # big penalty for loss of 30%
 
         return (
             None,
@@ -199,22 +198,23 @@ class TimeSeriesEnvironment(gym.Env):
             ) * prevAllocation + self.maxAllocationChange * targetAllocation
         else:
             prevAllocation = np.zeros(len(closingPriceChanges) + 1)
-            prevAllocation[0] = 1
-            self.allocations.append(prevAllocation)
+            prevAllocation[0] = 1  # all cash
             currentAllocation = targetAllocation
-        wealthDistribution = self.previousPortfolioValue * currentAllocation
+
         # 1 for cash - presumed not to change
         closingPriceChanges = np.insert(closingPriceChanges, 0, 0)
+        wealthDistribution = self.previousPortfolioValue * currentAllocation
         changeWealth = (1 + closingPriceChanges) * wealthDistribution
 
         transactionCost = 0
         if self.transactionCost > 0:
             transactionCost = self.transactionCost * np.sum(
-                self.previousPortfolioValue
-                * np.abs(currentAllocation - np.array(self.allocations[-1]))
+                self.previousPortfolioValue * np.abs(currentAllocation - prevAllocation)
             )
+        portfolioValue = np.sum(changeWealth) - transactionCost
+        self.previousPortfolioValue = portfolioValue
         self.allocations.append(currentAllocation)
-        return np.sum(changeWealth) - transactionCost
+        return portfolioValue
 
     def getPrices(
         self,
@@ -233,13 +233,6 @@ class TimeSeriesEnvironment(gym.Env):
         indexToBePicked = int(np.ceil(percentage * len(sortedReturns)))
         CVaR = np.mean(sortedReturns[:indexToBePicked])
         return CVaR
-
-    def updateReturns(self, profit):
-        self.RETURNS.append(profit)
-        self.PORTFOLIO_VALUES.append(
-            self.previousPortfolioValue + profit
-        )  # already updated earlier
-        self.previousPortfolioValue = self.previousPortfolioValue + profit
 
     def render(self, mode="human"):
         pass
