@@ -16,7 +16,7 @@ class LstmFeatureExtractor(BaseFeaturesExtractor):
         timeWindow,
         numFeatures,
         lstmHiddenSize=128,
-        lstmOutputSize=256,
+        lstmOutputSize=128,
         modelName="featureExtractor",
     ):
         super(LstmFeatureExtractor, self).__init__(
